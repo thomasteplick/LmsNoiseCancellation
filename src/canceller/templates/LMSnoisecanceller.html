@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="eng">
+	<head>
+		<title>"LMS Noise Canceller"</title>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<style type="text/css">
+			.options label {
+				font-size: 12px;
+				font-family: Arial, Helvetica, sans-serif;
+				width: 200px;
+				text-align: right;
+			}
+			
+			form, p{
+				width: 800px;
+			}
+
+			nav li{
+				display:inline;
+				margin: 20px;
+			}
+
+			input[type="number"] {
+				width: 50px;
+			}
+
+			.options input[type="text"] {
+				width: 50px;
+			}
+
+			td.align-right {
+				text-align: right;
+			}
+
+		</style>
+	</head>
+	<body>
+		<h2>Least-Mean-Square Equalizer</h3>
+		<nav>
+			<ul>
+				<li class="links"><a href="http://127.0.0.1:8080/plotresponse">Plot Response</a></li>
+				<li class="links"><a href="http://127.0.0.1:8080/filtersignal">Filter Signal</a></li>
+			</ul>
+		</nav>
+		<p> Enter samples, sample rate, SNR, trials, gain constant, signal frequency, 
+			channel poles (radius, angle), noise canceller, and order.  
+			The Least-Mean-Square algorithm will be used to create the adaptive filter.  The filter
+		    weights will be averaged over trials, each trial consisting of iterations.  The white Gaussian 
+			noise variance will be calculated from the SNR.  <b>The sine wave is the desired signal
+			to be extracted from the noisy input.</b>  The adaptive filter is saved to disk and
+			its impulse or frequency response can be displayed.  Additionally, the weights can be used to
+		    filter a noisy signal.  The links allow you to plot the impulse or frequency response
+			and to use the adaptive filter to filter a noisy signal.
+		</p>
+		<div id="form">
+			<form action="http://127.0.0.1:8080/lmsnoisecanceller" method="post">
+				<fieldset>
+					<legend>LMS Noise Canceller Options</legend>
+					<div class="options">
+						<table>
+							<tr>
+								<td class="align-right">
+									<label for="samples">Samples:</label>
+								</td>
+								<td>
+									<input type="number" id="samples" name="samples" min="3000" max="16000" required/>
+								</td>
+								<td class="align-right">
+									<label for="samplerate">Sample Rate:</label>
+								</td>
+								<td>
+									<input type="number" id="samplerate" name="samplerate" min="1" required />
+								</td>
+								<td class="align-right">
+									<label for="gain">Gain:</label>
+								</td>
+								<td>
+									<input type="text" id="gain" name="gain" required default="1" />
+								</td>
+							</tr>
+							<tr>
+								<td class="align-right">
+									<label for="trials">Trials:</label>
+								</td>
+								<td>
+									<input type="number" id="trials" name="trials" min="1" max="200" required />
+								</td>
+								<td class="align-right">
+									<label for="filtorder">Adaptive Filter Order:</label>
+								</td>
+								<td>
+									<input type="number" id="filtorder" name="filtorder" min="2" max="80" required />
+								</td>
+								<td class="align-right">
+									<label for="signalfreq">Signal Frequency(Hz):</label>
+								</td>
+								<td>
+									<input type="number" id="signalfreq" name="signalfreq" min="1" required />
+								</td>
+							</tr>
+						</table>
+						<p>
+								Noisy channel with white Gaussian noise at given signal-to-noise ratio.  Select complex
+								pole locations at r*cos(ang) +/- j r*sin(ang), where |r| &lt; 1, 0 &lt; ang &lt; 180:
+						</p>
+						<label for="polerad">Pole Radius:</label>
+						<input type="number" id="polerad" name="polerad" min=".01" max=".99" step=".01" required />
+						<label for="poleang">Pole Angle(deg):</label>
+						<input type="number" id="poleang" name="poleang" min="0" max="180" required />
+						<label for="snr">SNR:</label>
+						<input type="number" id="snr" name="snr" required />
+					</div>
+					<input type="submit" value="Submit" />
+					<input type="text" size="50" name="status" value="{{.Status}}" readonly />
+				</fieldset>
+			</form>
+		</div>
+	</body>
+</html>
