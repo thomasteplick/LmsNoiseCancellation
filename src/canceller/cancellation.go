@@ -1615,39 +1615,40 @@ func (fs *FilterSignal) gridFillInterp(plot *PlotT) error {
 	return nil
 }
 
-// generateSignal creates a since  wave at unit amplitude
+// generateSignal creates a sine  wave at unit amplitude
 func (fs *FilterSignal) generateSignal() error {
 
 	// determine where to send the signal
 
-	// save the signal to a disk file
+	// save the sine wave with random phase to a disk file
 	if fs.display == "channelin" {
 		f, _ := os.Create(path.Join(dataDir, signal))
 		defer f.Close()
-		r := fs.sampleFreq / fs.signalFreq
-		current := 1.0
 
-		// Save a signal sample to a disk file
+		phase := twoPi * rand.Float64()
+		omega := twoPi * float64(fs.signalFreq)
+		delta := 1.0 / float64(fs.sampleFreq)
+
+		var sample float64
+
+		// Save a sine wave with random phase to a disk file
 		for i := 0; i < fs.samples; i++ {
-			// new sample, randomly chosen
-			if i%r == 0 {
-				if rand.Float64() < 0.5 {
-					current = -1.0
-				} else {
-					current = 1.0
-				}
+			// new sample
+			for t := 0.0; t < float64(fs.samples)*delta; t += delta {
+				sample = math.Sin(omega*t + phase)
+				// Save the sample to disk file
+				fmt.Fprintf(f, "%f\n", sample)
 			}
-			fmt.Fprintf(f, "%f\n", current)
 
 			// find min/max of the signal as we go
-			if current < fs.ymin {
-				fs.ymin = current
+			if sample < fs.ymin {
+				fs.ymin = sample
 			}
-			if current > fs.ymax {
-				fs.ymax = current
+			if sample > fs.ymax {
+				fs.ymax = sample
 			}
 		}
-		// send the signal to the next stage
+		// else send the signal to the next stage
 	} else {
 		// increment wg
 		fs.wg.Add(1)
@@ -1660,20 +1661,16 @@ func (fs *FilterSignal) generateSignal() error {
 				close(fs.toChan)
 			}()
 
-			r := fs.sampleFreq / fs.signalFreq
-			current := 1.0
-
-			// Send a signal sample to noisy channel via the toChannel
+			phase := twoPi * rand.Float64()
+			omega := twoPi * float64(fs.signalFreq)
+			delta := 1.0 / float64(fs.sampleFreq)
+			// Send a sine wave with random phase to channel via the toChannel
 			for i := 0; i < fs.samples; i++ {
-				// new sample, randomly chosen
-				if i%r == 0 {
-					if rand.Float64() < 0.5 {
-						current = -1.0
-					} else {
-						current = 1.0
-					}
+				// new sample
+				for t := 0.0; t < float64(fs.samples)*delta; t += delta {
+					// Send the sample through the channel
+					fs.toChan <- math.Sin(omega*t + phase)
 				}
-				fs.toChan <- current
 			}
 		}()
 	}
@@ -1772,43 +1769,26 @@ func (fs *FilterSignal) chanFilter() error {
 				defer f.Close()
 			}()
 
-			// previous IIR outputs
-			r := make([]float64, 2)
-
-			// Convert degrees to radians
-			theta := fs.poleAng * math.Pi / 180.0
-
-			// IIR coefficients for channel impulse response
-			h := make([]float64, 2)
-			h[0] = 2.0 * math.Cos(theta) * fs.poleRad
-			h[1] = -fs.poleRad * fs.poleRad
-
 			// Calculate the noise standard deviation using the SNR and signal amplitude=1
-			noiseSD := math.Sqrt(math.Pow(10.0, -float64(fs.snr)/10.0))
+			noiseSD := math.Sqrt(math.Pow(10.0, -float64(2*fs.snr)/10.0))
 
-			// range over the input channel
-			for d := range fs.toChan {
-				temp := d + noiseSD*rand.NormFloat64()
-				for i, val := range r {
-					temp += h[i] * val
-				}
+			// range over the to channel to obtain the pure sine wave
+			for sig := range fs.toChan {
+				// generate a normal rv at specified standard deviation
+				signorm := sig + noiseSD*rand.NormFloat64()
 
 				// Send output to disk file
-				fmt.Fprintf(f, "%v\n", temp)
+				fmt.Fprintf(f, "%v\n", signorm)
 
 				// find min/max of the signal as we go
-				if temp < fs.ymin {
-					fs.ymin = temp
+				if signorm < fs.ymin {
+					fs.ymin = signorm
 				}
-				if temp > fs.ymax {
-					fs.ymax = temp
+				if signorm > fs.ymax {
+					fs.ymax = signorm
 				}
-
-				// Update the recursion
-				r[0], r[1] = d, r[0]
 			}
 		}()
-		// send the output to the next stage
 	} else {
 		fs.wg.Add(1)
 		go func() {
@@ -1818,31 +1798,16 @@ func (fs *FilterSignal) chanFilter() error {
 				close(fs.fromChan)
 			}()
 
-			// previous IIR outputs
-			r := make([]float64, 2)
-
-			// Convert degrees to radians
-			theta := fs.poleAng * math.Pi / 180.0
-
-			// IIR coefficients for channel impulse response
-			h := make([]float64, 2)
-			h[0] = 2.0 * math.Cos(theta) * fs.poleRad
-			h[1] = -fs.poleRad * fs.poleRad
-
 			// Calculate the noise standard deviation using the SNR and signal amplitude=1
-			noiseSD := math.Sqrt(math.Pow(10.0, -float64(fs.snr)/10.0))
+			noiseSD := math.Sqrt(math.Pow(10.0, -float64(2*fs.snr)/10.0))
 
-			// range over the input channel
-			for d := range fs.toChan {
-				temp := d + noiseSD*rand.NormFloat64()
-				for i, val := range r {
-					temp += h[i] * val
-				}
+			// range over the to channel to obtain the pure sine wave
+			for sig := range fs.toChan {
+				// generate a normal rv at specified standard deviation
+				signorm := sig + noiseSD*rand.NormFloat64()
 
-				// Send output to next stage via the output channel
-				fs.fromChan <- temp
-				// Update the recursion
-				r[0], r[1] = d, r[0]
+				// Send output to next stage via the from channel
+				fs.fromChan <- signorm
 			}
 		}()
 	}
@@ -2065,6 +2030,11 @@ func handleFilterSignal(w http.ResponseWriter, r *http.Request) {
 			fromChan:    make(chan float64),
 			toChan:      make(chan float64),
 			display:     display,
+			Endpoints: Endpoints{
+				xmin: math.MaxFloat64,
+				xmax: -math.MaxFloat64,
+				ymin: math.MaxFloat64,
+				ymax: -math.MaxFloat64},
 		}
 
 		// Generate input data consisting of a sine wave at unit amplitude
