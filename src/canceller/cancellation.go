@@ -77,6 +77,7 @@ type PlotT struct {
 	SigFreq     string   // sine wave frequency in Hz
 	PoleRad     string   // channel pole radius
 	PoleAng     string   // channel pole angle in degrees
+	Order       string   // adaptive filter order
 }
 
 // Type to hold the minimum and maximum data values
@@ -106,10 +107,11 @@ type ComChan struct {
 // Data to construct the processing chain for display
 type FilterSignal struct {
 	toChan      chan float64 // synchronized channel to noisy channel from signal source generator
-	fromChan    chan float64 // synchronized channel to adaptive filter from noisy channel
+	fromChan    chan ComChan // synchronized channel to adaptive filter from noisy channel
 	wg          sync.WaitGroup
 	samples     int       // total number of samples per submit
 	sampleFreq  int       // sample frequency in Hz
+	order       int       // adaptive filter order
 	snr         int       // signal to noise ratio in dB
 	FilterState           // used by current sample block from previous sample block
 	filterCoeff []float64 // filter coefficients for the adaptive filter
@@ -1155,13 +1157,12 @@ func (lms *LMSAlgorithm) generateSignal() error {
 		omega := twoPi * float64(lms.signalFreq)
 		delta := 1.0 / float64(lms.samplerate)
 		// Send a sine wave with random phase to channel via the toChannel
-		for i := 0; i < lms.samples; i++ {
-			// new sample, randomly chosen
-			for t := 0.0; t < float64(lms.samples)*delta; t += delta {
-				// Send the sample through the channel
-				lms.toChan <- math.Sin(omega*t + phase)
-			}
+		// new sample, randomly chosen
+		for t := 0.0; t < float64(lms.samples)*delta; t += delta {
+			// Send the sample through the channel
+			lms.toChan <- math.Sin(omega*t + phase)
 		}
+
 	}()
 	return nil
 }
@@ -1181,6 +1182,14 @@ func (lms *LMSAlgorithm) chanFilter() error {
 		// previous IIR outputs
 		r := make([]float64, 2)
 
+		// number of adaptive filter coefficients
+		L := lms.order + 1
+		// desired input to LMS algorithm is delayed by half the filter length
+		delay := L / 2
+		// desired holds past inputs, of which we send the delayed sample along
+		// with the current correlated sample
+		desired := make([]float64, L)
+
 		// Convert degrees to radians
 		theta := lms.poleAng * math.Pi / 180.0
 
@@ -1193,20 +1202,34 @@ func (lms *LMSAlgorithm) chanFilter() error {
 		noiseSD := math.Sqrt(math.Pow(10.0, -float64(2*lms.snr)/10.0))
 
 		// range over the to channel to obtain the pure sine wave
+		j := 0
+		k := L / 2
 		for sig := range lms.toChan {
 			// generate a normal rv at specified standard deviation
-			norm := noiseSD * rand.NormFloat64()
+			normrv := noiseSD * rand.NormFloat64()
 			// correlated noise for the reference LMS input
-			correlated := norm
+			correlated := normrv
+
 			for i, val := range r {
 				correlated += h[i] * val
 			}
 
 			// Send output to next stage via the from channel
 			// "desired" is the signal + normal noise, "in" is the correlated noise
-			lms.fromChan <- ComChan{desired: sig + norm, in: correlated}
+			lms.fromChan <- ComChan{desired: desired[k], in: correlated}
+
 			// Update the recursion for the correlated noise
-			r[0], r[1] = norm, r[0]
+			r[0], r[1] = normrv, r[0]
+
+			// store the current sample at the end of desired slice
+			desired[j%L] = sig + normrv
+			j++
+			// roll over the index k to the end of the desired slice if
+			// negative:  -1 becomes L-1
+			k = (j - delay) % L
+			if k < 0 {
+				k = L + k
+			}
 		}
 	}()
 	return nil
@@ -1436,7 +1459,6 @@ func handleLmsNoiseCanceller(w http.ResponseWriter, r *http.Request) {
 		// Run the Least-Mean-Square (LMS) algorithm to create the adaptive filter
 		// Loop over the trials to generate the ensemble of filters which is averaged.
 		for i := 0; i < lmsNoiseCanceller.trials; i++ {
-
 			// Create new channels each trial since they are closed after each trial
 			lmsNoiseCanceller.fromChan = make(chan ComChan)
 			lmsNoiseCanceller.toChan = make(chan float64)
@@ -1632,14 +1654,11 @@ func (fs *FilterSignal) generateSignal() error {
 		var sample float64
 
 		// Save a sine wave with random phase to a disk file
-		for i := 0; i < fs.samples; i++ {
-			// new sample
-			for t := 0.0; t < float64(fs.samples)*delta; t += delta {
-				sample = math.Sin(omega*t + phase)
-				// Save the sample to disk file
-				fmt.Fprintf(f, "%f\n", sample)
-			}
-
+		// new sample
+		for t := 0.0; t < float64(fs.samples)*delta; t += delta {
+			sample = math.Sin(omega*t + phase)
+			// Save the sample to disk file
+			fmt.Fprintf(f, "%f\n", sample)
 			// find min/max of the signal as we go
 			if sample < fs.ymin {
 				fs.ymin = sample
@@ -1665,12 +1684,10 @@ func (fs *FilterSignal) generateSignal() error {
 			omega := twoPi * float64(fs.signalFreq)
 			delta := 1.0 / float64(fs.sampleFreq)
 			// Send a sine wave with random phase to channel via the toChannel
-			for i := 0; i < fs.samples; i++ {
-				// new sample
-				for t := 0.0; t < float64(fs.samples)*delta; t += delta {
-					// Send the sample through the channel
-					fs.toChan <- math.Sin(omega*t + phase)
-				}
+			// new sample
+			for t := 0.0; t < float64(fs.samples)*delta; t += delta {
+				// Send the sample through the channel
+				fs.toChan <- math.Sin(omega*t + phase)
 			}
 		}()
 	}
@@ -1722,7 +1739,7 @@ func (fs *FilterSignal) noiseCancellerFilter() error {
 			i := 0
 			// range over the channel containing the noisy signal
 			for d := range fs.fromChan {
-				x[i] = d
+				x[i] = d.in
 				y := 0.0
 				k := i
 				for j := 0; j < L; j++ {
@@ -1733,15 +1750,17 @@ func (fs *FilterSignal) noiseCancellerFilter() error {
 					}
 				}
 
-				// Send output to disk file
-				fmt.Fprintf(f, "%f\n", y)
+				// Save error to disk file.  This is the estimated noise
+				// subtracted from the desired.
+				e := d.desired - y
+				fmt.Fprintf(f, "%f\n", e)
 
 				// find min/max of the signal as we go
-				if y < fs.ymin {
-					fs.ymin = y
+				if e < fs.ymin {
+					fs.ymin = e
 				}
-				if y > fs.ymax {
-					fs.ymax = y
+				if e > fs.ymax {
+					fs.ymax = e
 				}
 				// Increment the current input index for x slice
 				i = (i + 1) % L
@@ -1798,16 +1817,57 @@ func (fs *FilterSignal) chanFilter() error {
 				close(fs.fromChan)
 			}()
 
+			// previous IIR outputs
+			r := make([]float64, 2)
+
+			// number of adaptive filter coefficients
+			L := fs.order + 1
+			// desired input to LMS algorithm is delayed by half the filter length
+			delay := L / 2
+			// desired holds past inputs, of which we send the delayed sample along
+			// with the current correlated sample
+			desired := make([]float64, L)
+
+			// Convert degrees to radians
+			theta := fs.poleAng * math.Pi / 180.0
+
+			// IIR coefficients for correlated noise
+			h := make([]float64, 2)
+			h[0] = 2.0 * math.Cos(theta) * fs.poleRad
+			h[1] = -fs.poleRad * fs.poleRad
+
 			// Calculate the noise standard deviation using the SNR and signal amplitude=1
 			noiseSD := math.Sqrt(math.Pow(10.0, -float64(2*fs.snr)/10.0))
 
 			// range over the to channel to obtain the pure sine wave
+			j := 0
+			k := L / 2
 			for sig := range fs.toChan {
 				// generate a normal rv at specified standard deviation
-				signorm := sig + noiseSD*rand.NormFloat64()
+				normrv := noiseSD * rand.NormFloat64()
+				// correlated noise for the reference LMS input
+				correlated := normrv
+
+				for i, val := range r {
+					correlated += h[i] * val
+				}
 
 				// Send output to next stage via the from channel
-				fs.fromChan <- signorm
+				// "desired" is the signal + normal noise, "in" is the correlated noise
+				fs.fromChan <- ComChan{desired: desired[k], in: correlated}
+
+				// Update the recursion for the correlated noise
+				r[0], r[1] = normrv, r[0]
+
+				// store the current sample at the end of desired slice
+				desired[j%L] = sig + normrv
+				j++
+				// roll over the index k to the end of the desired slice if
+				// negative:  -1 becomes L-1
+				k = (j - delay) % L
+				if k < 0 {
+					k = L + k
+				}
 			}
 		}()
 	}
@@ -1845,6 +1905,7 @@ func (fs *FilterSignal) labelExec(w http.ResponseWriter, plot *PlotT) {
 	plot.PoleAng = fmt.Sprintf("%f", fs.poleAng)
 	plot.PoleRad = fmt.Sprintf("%f", fs.poleRad)
 	plot.SigFreq = strconv.Itoa(fs.signalFreq)
+	plot.Order = strconv.Itoa(fs.order)
 
 	if len(plot.Status) == 0 {
 		plot.Status = fmt.Sprintf("Signal consisting of a sine wave in noisy channel"+
@@ -1865,6 +1926,7 @@ func handleFilterSignal(w http.ResponseWriter, r *http.Request) {
 		poleAng    float64
 		poleRad    float64
 		filterfile string
+		order      int
 	)
 
 	// need number of samples and sample frequency to continue
@@ -1956,6 +2018,23 @@ func handleFilterSignal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// adaptive filter order is the number of past samples
+			// filter length = order + 1
+			txt = r.FormValue("filtorder")
+			order, err = strconv.Atoi(txt)
+			if err != nil {
+				plot.Status = fmt.Sprintf("Filter order conversion to int error: %v", err.Error())
+				fmt.Printf("Filter order conversion to int error: %v\n", err.Error())
+				// Write to HTTP using template and grid
+				if err := filterSignalTmpl.Execute(w, plot); err != nil {
+					log.Fatalf("Write to HTTP output using template with error: %v\n", err)
+				}
+				return
+			}
+			// Make filter length odd, which means filter order is even;
+			// if order is 7, it is changed to 8, and the length becomes 9.
+			order = (order + 1) / 2 * 2
+
 		}
 		// Need adaptive filter file
 		if display == "noisecancellerout" {
@@ -2021,13 +2100,14 @@ func handleFilterSignal(w http.ResponseWriter, r *http.Request) {
 			samples:     samples,
 			sampleFreq:  sampfreq,
 			signalFreq:  sigfreq,
+			order:       order,
 			FilterState: filterState,
 			filterCoeff: make([]float64, 0),
 			filterfile:  filterfile,
 			poleRad:     poleRad,
 			poleAng:     poleAng,
 			snr:         snr,
-			fromChan:    make(chan float64),
+			fromChan:    make(chan ComChan),
 			toChan:      make(chan float64),
 			display:     display,
 			Endpoints: Endpoints{
