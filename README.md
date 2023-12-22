@@ -28,5 +28,13 @@ After the adaptive filter is produced, the impulse or frequency response of the 
 
 ![FilterSignalChannelIn5](https://github.com/thomasteplick/LmsNoiseCancellation/assets/117768679/a446d7f9-7eb1-40cf-b8ae-9c82e2619f51)
 
+<h4>Filter Signal, Channel Output, -10dB SNR, .99 Pole Radius, 10 degree Pole Angle</h4>
+
+![FilterSignalChannelOut6](https://github.com/thomasteplick/LmsNoiseCancellation/assets/117768679/a97805d3-9b72-4e52-aacf-710f4567788a)
+
+<h4>Filter Signal, Adaptive Filter Output, -10dB SNR, .99 Pole Radius, 10 degree Pole Angle</h4>
+
+![FilterSignalNoiseCancellerOutput7](https://github.com/thomasteplick/LmsNoiseCancellation/assets/117768679/63bb0842-2c03-45a7-b266-90dabf336496)
+
 
 
